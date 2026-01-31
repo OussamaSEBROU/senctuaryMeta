@@ -174,7 +174,7 @@ ${schemaDescription}`;
                 url: `data:application/pdf;base64,${pdfBase64}`,
               },
             },
-          ],
+          ] as any,
         },
       ],
       response_format: { type: "json_object" },
