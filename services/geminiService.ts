@@ -224,8 +224,23 @@ ${schemaDescription}`;
       response_format: { type: "json_object" },
     });
 
-    const responseContent = completion.choices[0]?.message?.content || "{}";
-    const result = JSON.parse(responseContent);
+    let responseContent = completion.choices[0]?.message?.content || "{}";
+
+    // Robust JSON extraction: Find the first '{' and last '}'
+    const jsonStartIndex = responseContent.indexOf('{');
+    const jsonEndIndex = responseContent.lastIndexOf('}');
+
+    if (jsonStartIndex !== -1 && jsonEndIndex !== -1) {
+      responseContent = responseContent.substring(jsonStartIndex, jsonEndIndex + 1);
+    }
+
+    let result;
+    try {
+      result = JSON.parse(responseContent);
+    } catch (e) {
+      console.error("JSON Parse Error. Raw content:", responseContent);
+      throw new Error("FAILED_TO_PARSE_JSON");
+    }
 
     manuscriptSnippets = result.snippets || [];
     fullManuscriptText = result.fullText || "";
@@ -235,7 +250,7 @@ ${schemaDescription}`;
     // توفير التوكنز: مسح الـ PDF بعد الاستخراج الأول
     currentPdfBase64 = null;
 
-    return result.axioms;
+    return result.axioms || [];
   } catch (error: any) {
     console.error("Error in extractAxioms:", error);
     throw error;
