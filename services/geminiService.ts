@@ -3,8 +3,9 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { Axiom, Language } from "../types";
 import { translations } from "../translations";
 
-// Use UNPKG CDN for worker to avoid complex bundler config for now
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@4.0.379/build/pdf.worker.min.js`;
+// Use Explicit Worker URL to avoid dynamic import issues
+// Using the legacy build often resolves instantiation errors in some environments
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs`;
 
 // --- Groq Chat Session Wrapper ---
 class GroqChatSession {
