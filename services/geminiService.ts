@@ -132,12 +132,51 @@ const throttleRequest = async () => {
   lastRequestTime = Date.now();
 };
 
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Use UNPKG CDN for worker to avoid complex bundler config for now
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+
+const convertPdfToImages = async (base64: string): Promise<string[]> => {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+
+  const loadingTask = pdfjsLib.getDocument({ data: bytes });
+  const pdf = await loadingTask.promise;
+
+  const images: string[] = [];
+  // Process up to first 4 pages to stay within limits/time
+  const maxPages = Math.min(pdf.numPages, 4);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 1.5 }); // Good quality for OCR
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+
+    if (context) {
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
+      images.push(canvas.toDataURL('image/jpeg', 0.8));
+    }
+  }
+  return images;
+};
+
 export const extractAxioms = async (pdfBase64: string, lang: Language): Promise<Axiom[]> => {
   try {
     await throttleRequest();
     const groq = getGroqClient();
     chatSession = null;
     currentPdfBase64 = pdfBase64;
+
+    // Convert PDF pages to Images for Llama Vision
+    const pageImages = await convertPdfToImages(pdfBase64);
 
     const schemaDescription = `
     RETURN ONLY JSON matching this structure:
@@ -157,6 +196,18 @@ export const extractAxioms = async (pdfBase64: string, lang: Language): Promise<
 IMPORTANT: The 'axioms', 'snippets', and 'metadata' MUST be in the SAME LANGUAGE as the PDF manuscript itself.
 ${schemaDescription}`;
 
+    // Construct message content with multiple images
+    const contentPayload: any[] = [
+      { type: "text", text: combinedPrompt }
+    ];
+
+    pageImages.forEach(imgDataUrl => {
+      contentPayload.push({
+        type: "image_url",
+        image_url: { url: imgDataUrl }
+      });
+    });
+
     const completion = await groq.chat.completions.create({
       model: MODEL_NAME,
       messages: [
@@ -166,36 +217,37 @@ ${schemaDescription}`;
         },
         {
           role: "user",
-          content: [
-            { type: "text", text: combinedPrompt },
+          content: contentPayload,
+        },
+      ],
             {
-              type: "image_url",
-              image_url: {
-                url: `data:application/pdf;base64,${pdfBase64}`,
-              },
-            },
+        type: "image_url",
+        image_url: {
+          url: `data:application/pdf;base64,${pdfBase64}`,
+        },
+      },
           ] as any,
         },
       ],
-      response_format: { type: "json_object" },
+response_format: { type: "json_object" },
     });
 
-    const responseContent = completion.choices[0]?.message?.content || "{}";
-    const result = JSON.parse(responseContent);
+const responseContent = completion.choices[0]?.message?.content || "{}";
+const result = JSON.parse(responseContent);
 
-    manuscriptSnippets = result.snippets || [];
-    fullManuscriptText = result.fullText || "";
-    manuscriptMetadata = result.metadata || {};
-    documentChunks = chunkText(fullManuscriptText);
+manuscriptSnippets = result.snippets || [];
+fullManuscriptText = result.fullText || "";
+manuscriptMetadata = result.metadata || {};
+documentChunks = chunkText(fullManuscriptText);
 
-    // توفير التوكنز: مسح الـ PDF بعد الاستخراج الأول
-    currentPdfBase64 = null;
+// توفير التوكنز: مسح الـ PDF بعد الاستخراج الأول
+currentPdfBase64 = null;
 
-    return result.axioms;
+return result.axioms;
   } catch (error: any) {
-    console.error("Error in extractAxioms:", error);
-    throw error;
-  }
+  console.error("Error in extractAxioms:", error);
+  throw error;
+}
 };
 
 export const getManuscriptSnippets = () => manuscriptSnippets;
@@ -244,4 +296,3 @@ INSTRUCTION: Scan the entire manuscript to find the answer. Adopt the author's s
     throw error;
   }
 };
-
