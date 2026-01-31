@@ -4,8 +4,9 @@ import { Axiom, Language } from "../types";
 import { translations } from "../translations";
 
 // Use Explicit Worker URL to avoid dynamic import issues
-// Using the legacy build often resolves instantiation errors in some environments
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs`;
+// Use Explicit Worker URL to avoid dynamic import issues
+// We use the version directly from the library to ensure they match exactly
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 // --- Groq Chat Session Wrapper ---
 class GroqChatSession {
