@@ -371,9 +371,9 @@ USER QUESTION: ${userPrompt}
 INSTRUCTION: The specific context chunks were not found. However, use the provided 'MANUSCRIPT STRUCTURE' (Table of Contents/Intro) to answer if possible (e.g., if the user asks about chapter titles or general structure). If the detail is likely in the body text but not in this structure, state clearly that you need more specific context. Adopt the author's style.`;
     }
 
-    if (!chatSession) {
-      chatSession = new GroqChatSession(groq, MODEL_NAME, getSystemInstruction(lang));
-    }
+    // Always create a FRESH session for each question to ensure the latest prompt construction and metadata are used.
+    // This fixes the "Neural link failure" where the system instruction was stale or missing context.
+    chatSession = new GroqChatSession(groq, MODEL_NAME, getSystemInstruction(lang));
 
     const result = chatSession.sendMessageStream({ message: augmentedPrompt });
 
