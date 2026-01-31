@@ -1,6 +1,10 @@
 import Groq from "groq-sdk";
+import * as pdfjsLib from 'pdfjs-dist';
 import { Axiom, Language } from "../types";
 import { translations } from "../translations";
+
+// Use UNPKG CDN for worker to avoid complex bundler config for now
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@4.0.379/build/pdf.worker.min.js`;
 
 // --- Groq Chat Session Wrapper ---
 class GroqChatSession {
@@ -132,11 +136,6 @@ const throttleRequest = async () => {
   lastRequestTime = Date.now();
 };
 
-import * as pdfjsLib from 'pdfjs-dist';
-
-// Use UNPKG CDN for worker to avoid complex bundler config for now
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
-
 const convertPdfToImages = async (base64: string): Promise<string[]> => {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -220,34 +219,25 @@ ${schemaDescription}`;
           content: contentPayload,
         },
       ],
-            {
-        type: "image_url",
-        image_url: {
-          url: `data:application/pdf;base64,${pdfBase64}`,
-        },
-      },
-          ] as any,
-        },
-      ],
-response_format: { type: "json_object" },
+      response_format: { type: "json_object" },
     });
 
-const responseContent = completion.choices[0]?.message?.content || "{}";
-const result = JSON.parse(responseContent);
+    const responseContent = completion.choices[0]?.message?.content || "{}";
+    const result = JSON.parse(responseContent);
 
-manuscriptSnippets = result.snippets || [];
-fullManuscriptText = result.fullText || "";
-manuscriptMetadata = result.metadata || {};
-documentChunks = chunkText(fullManuscriptText);
+    manuscriptSnippets = result.snippets || [];
+    fullManuscriptText = result.fullText || "";
+    manuscriptMetadata = result.metadata || {};
+    documentChunks = chunkText(fullManuscriptText);
 
-// توفير التوكنز: مسح الـ PDF بعد الاستخراج الأول
-currentPdfBase64 = null;
+    // توفير التوكنز: مسح الـ PDF بعد الاستخراج الأول
+    currentPdfBase64 = null;
 
-return result.axioms;
+    return result.axioms;
   } catch (error: any) {
-  console.error("Error in extractAxioms:", error);
-  throw error;
-}
+    console.error("Error in extractAxioms:", error);
+    throw error;
+  }
 };
 
 export const getManuscriptSnippets = () => manuscriptSnippets;
