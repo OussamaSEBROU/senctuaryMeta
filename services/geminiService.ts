@@ -216,7 +216,7 @@ ${schemaDescription}`;
         },
         {
           role: "user",
-          content: contentPayload,
+          content: contentPayload as any,
         },
       ],
       response_format: { type: "json_object" },
