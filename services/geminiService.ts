@@ -85,7 +85,7 @@ export const getGroqClient = () => {
   return new Groq({ apiKey, dangerouslyAllowBrowser: true }); // Enable browser usage if needed
 };
 
-const MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct";
+const MODEL_NAME = "groq/compound";
 
 /**
  * استعادة استراتيجية التقطيع الأصلية لضمان جودة السياق
