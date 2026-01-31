@@ -85,7 +85,7 @@ export const getGroqClient = () => {
   return new Groq({ apiKey, dangerouslyAllowBrowser: true }); // Enable browser usage if needed
 };
 
-const MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct";
+const MODEL_NAME = "meta-llama/llama-4-maverick-17b-128e-instruct";
 
 /**
  * استعادة استراتيجية التقطيع الأصلية لضمان جودة السياق
@@ -307,6 +307,13 @@ ${schemaDescription}`;
     // If native text is empty (pure scan), fall back to what Llama extracted (likely partial).
     fullManuscriptText = nativeText.trim().length > 500 ? nativeText : (result.fullText || "");
 
+    // --- STRUCTURAL MAP STRATEGY ---
+    // Forcefully capture the first 15,000 characters (Intro + TOC) as the "Structural Context"
+    // This allows the model to "know what it doesn't know" and reference chapters by name even if their content is not in the chunk.
+    const structuralMap = fullManuscriptText.substring(0, Math.min(15000, fullManuscriptText.length));
+    manuscriptMetadata.chapters = `*** TABLE OF CONTENTS & INTRO MAP ***\n${structuralMap}\n*** END MAP ***`;
+
+
     documentChunks = chunkText(fullManuscriptText);
 
     // توفير التوكنز: مسح الـ PDF بعد الاستخراج الأول
@@ -338,7 +345,11 @@ export const chatWithManuscriptStream = async (
 
     if (hasChunks) {
       const contextText = relevantChunks.join("\n\n---\n\n");
-      augmentedPrompt = `CRITICAL CONTEXT FROM MANUSCRIPT (Use this to answer):
+      // Inject Structural Map + Specific Chunks
+      augmentedPrompt = `MANUSCRIPT STRUCTURE (Table of Contents / Map):
+${manuscriptMetadata.chapters || "Not available"}
+
+CRITICAL CONTEXT CHUNKS (Use this to answer):
 ${contextText}
 
 USER QUESTION:
@@ -346,20 +357,24 @@ ${userPrompt}
 
 INSTRUCTION: You are an advanced analytical engine capable of deep synthesis.
 1. Answer the question COMPREHENSIVELY using ONLY the provided context.
-2. If the answer is scattered across multiple chunks, synthesize them into a cohesive narrative.
-3. If the question asks for a summary or broad concept, ensure you cover all relevant aspects found in the context.
-4. Adopt the author's intellectual style.
-5. Support your arguments with direct, verbatim quotes from the text.`;
+2. Use the 'MANUSCRIPT STRUCTURE' to understand where the chunks fit in the whole book.
+3. If the answer is scattered across multiple chunks, synthesize them into a cohesive narrative.
+4. If the question asks for a summary or broad concept, ensure you cover all relevant aspects found in the context.
+5. Adopt the author's intellectual style.
+6. Support your arguments with direct, verbatim quotes from the text.`;
     } else {
-      augmentedPrompt = `USER QUESTION: ${userPrompt}
-INSTRUCTION: The specific context was not found in the initial search. However, based on your general analysis of the manuscript's metadata and structure, attempt to provide a helpful answer if possible, or clearly state that this specific detail is not present in the extracted text. Adopt the author's style.`;
+      augmentedPrompt = `MANUSCRIPT STRUCTURE (Table of Contents / Map):
+${manuscriptMetadata.chapters || "Not available"}
+
+USER QUESTION: ${userPrompt}
+
+INSTRUCTION: The specific context chunks were not found. However, use the provided 'MANUSCRIPT STRUCTURE' (Table of Contents/Intro) to answer if possible (e.g., if the user asks about chapter titles or general structure). If the detail is likely in the body text but not in this structure, state clearly that you need more specific context. Adopt the author's style.`;
     }
 
     if (!chatSession) {
       chatSession = new GroqChatSession(groq, MODEL_NAME, getSystemInstruction(lang));
     }
 
-    // إرسال الطلب مع الحفاظ على جودة الإجابة الأصلية
     const result = chatSession.sendMessageStream({ message: augmentedPrompt });
 
     for await (const chunk of result) {
