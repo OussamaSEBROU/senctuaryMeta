@@ -9,8 +9,8 @@ import { translations } from "../translations";
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 // --- Groq Chat Session Wrapper ---
+// --- Groq Chat Session Wrapper ---
 class GroqChatSession {
-  private history: any[] = [];
   private client: Groq;
   private model: string;
   private systemInstruction: string;
@@ -19,29 +19,28 @@ class GroqChatSession {
     this.client = client;
     this.model = model;
     this.systemInstruction = systemInstruction;
-    this.history.push({ role: "system", content: systemInstruction });
   }
 
   async *sendMessageStream(request: { message: string }) {
-    this.history.push({ role: "user", content: request.message });
+    // Statless request for now to ensure robustness
+    const messages: any[] = [
+      { role: "system", content: this.systemInstruction },
+      { role: "user", content: request.message }
+    ];
 
     const stream = await this.client.chat.completions.create({
-      messages: this.history,
+      messages: messages,
       model: this.model,
       stream: true,
       temperature: 0.2,
     });
 
-    let fullResponse = "";
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content || "";
       if (content) {
-        fullResponse += content;
         yield { text: content };
       }
     }
-
-    this.history.push({ role: "assistant", content: fullResponse });
   }
 }
 
