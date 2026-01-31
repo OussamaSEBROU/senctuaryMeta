@@ -89,14 +89,15 @@ const MODEL_NAME = "meta-llama/llama-4-maverick-17b-128e-instruct";
 
 /**
  * استعادة استراتيجية التقطيع الأصلية لضمان جودة السياق
+ * Increased chunk size to 2500 to capture more context per segment.
  */
-const chunkText = (text: string, chunkSize: number = 1800, overlap: number = 250): string[] => {
+const chunkText = (text: string, chunkSize: number = 2500, overlap: number = 400): string[] => {
   const chunks: string[] = [];
   let start = 0;
   while (start < text.length) {
     const end = Math.min(start + chunkSize, text.length);
     const chunk = text.substring(start, end);
-    if (chunk.trim().length >= 200) chunks.push(chunk);
+    if (chunk.trim().length >= 100) chunks.push(chunk);
     if (end === text.length) break;
     start += chunkSize - overlap;
   }
@@ -105,28 +106,46 @@ const chunkText = (text: string, chunkSize: number = 1800, overlap: number = 250
 
 /**
  * استعادة منطق الاسترجاع الأصلي مع تحسين بسيط في النقاط لضمان الجودة
+ * Boosted TopK to 15 to ensure comprehensive coverage of the manuscript.
  */
-const retrieveRelevantChunks = (query: string, chunks: string[], topK: number = 2): string[] => {
+const retrieveRelevantChunks = (query: string, chunks: string[], topK: number = 15): string[] => {
   if (chunks.length === 0) return [];
   const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-  const MIN_SCORE_THRESHOLD = 4;
+  // Lowered threshold to ensure we get context even for vague queries
+  const MIN_SCORE_THRESHOLD = 1;
 
   const scoredChunks = chunks.map(chunk => {
     const chunkLower = chunk.toLowerCase();
     let score = 0;
-    queryWords.forEach(word => { if (chunkLower.includes(word)) score += 2; });
+    queryWords.forEach(word => {
+      // Higher weight for exact matches
+      if (chunkLower.includes(word)) score += 3;
+    });
+
+    // Boost introduction/metadata chunks slightly if asking about author/title
     const qLower = query.toLowerCase();
-    if (qLower.includes("كاتب") || qLower.includes("مؤلف") || qLower.includes("author")) {
-      if (chunks.indexOf(chunk) === 0) score += 5;
+    if (qLower.includes("كاتب") || qLower.includes("مؤلف") || qLower.includes("author") || qLower.includes("title")) {
+      if (chunks.indexOf(chunk) < 3) score += 2;
     }
+
     return { chunk, score };
   });
 
-  return scoredChunks
-    .sort((a, b) => b.score - a.score)
-    .filter(item => item.score >= MIN_SCORE_THRESHOLD)
+  // Sort by score
+  scoredChunks.sort((a, b) => b.score - a.score);
+
+  // If we have high-scoring chunks, filter by threshold.
+  // If not, we still return the top matching ones even if score is low (fallback).
+  let relevant = scoredChunks.filter(item => item.score >= MIN_SCORE_THRESHOLD);
+
+  if (relevant.length < 3) {
+    // Fallback: just take top chunks even if low score to provide SOME context
+    relevant = scoredChunks;
+  }
+
+  return relevant
     .slice(0, topK)
-    .map(item => item.chunk); // إرسال القطعة كاملة دون ضغط لضمان الجودة الأصلية
+    .map(item => item.chunk);
 };
 
 const throttleRequest = async () => {
@@ -169,6 +188,34 @@ const convertPdfToImages = async (base64: string): Promise<string[]> => {
   return images;
 };
 
+// --- Native Text Extraction for Full Coverage ---
+const extractNativeText = async (base64: string): Promise<string> => {
+  try {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    const loadingTask = pdfjsLib.getDocument({ data: bytes });
+    const pdf = await loadingTask.promise;
+
+    let fullText = "";
+    // Extract text from ALL pages to ensure full coverage
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item: any) => item.str).join(" ");
+      fullText += `--- Page ${i} ---\n${pageText}\n\n`;
+    }
+    return fullText;
+  } catch (e) {
+    console.warn("Native text extraction failed (likely scanned PDF), falling back to Vision only.");
+    return "";
+  }
+};
+
 export const extractAxioms = async (pdfBase64: string, lang: Language): Promise<Axiom[]> => {
   try {
     await throttleRequest();
@@ -176,7 +223,12 @@ export const extractAxioms = async (pdfBase64: string, lang: Language): Promise<
     chatSession = null;
     currentPdfBase64 = pdfBase64;
 
-    // Convert PDF pages to Images for Llama Vision
+    // 1. Try to extract NATIVE text from the whole book (for deep RAG & Chat)
+    // This is crucial for answering questions about specific pages later.
+    let nativeText = await extractNativeText(pdfBase64);
+
+    // 2. Convert FIRST FEW pages to Images for Llama Vision (visual analysis of style/cover)
+    // Increased to 8 pages for better initial context
     const pageImages = await convertPdfToImages(pdfBase64);
 
     const schemaDescription = `
@@ -184,15 +236,20 @@ export const extractAxioms = async (pdfBase64: string, lang: Language): Promise<
     {
       "axioms": [ { "term": "string", "definition": "string", "significance": "string" } ],
       "snippets": [ "string" ],
-      "metadata": { "title": "string", "author": "string", "chapters": "string" },
-      "fullText": "string"
+      "metadata": { "title": "string", "author": "string", "chapters": "string" }
     }
     `;
 
+    // Only include a portion of native text in the prompt to avoid token overflow, 
+    // but we will use the FULL nativeText for the RAG system below.
+    const textPreview = nativeText.length > 20000 ? nativeText.substring(0, 20000) + "...(truncated)" : nativeText;
+
     const combinedPrompt = `1. Extract exactly 13 high-quality 'Knowledge Axioms' from this manuscript.
 2. Extract 10 short, profound, and useful snippets or quotes DIRECTLY from the text (verbatim).
-3. Extract the FULL TEXT of this PDF accurately.
-4. Identify the Title, Author, and a brief list of Chapters/Structure.
+3. Identify the Title, Author, and a brief list of Chapters/Structure.
+
+CONTEXT from Text Layer (Partial):
+${textPreview}
 
 IMPORTANT: The 'axioms', 'snippets', and 'metadata' MUST be in the SAME LANGUAGE as the PDF manuscript itself.
 ${schemaDescription}`;
@@ -244,8 +301,12 @@ ${schemaDescription}`;
     }
 
     manuscriptSnippets = result.snippets || [];
-    fullManuscriptText = result.fullText || "";
     manuscriptMetadata = result.metadata || {};
+
+    // CRITICAL: Use the full NATIVE text for chunking if available. 
+    // If native text is empty (pure scan), fall back to what Llama extracted (likely partial).
+    fullManuscriptText = nativeText.trim().length > 500 ? nativeText : (result.fullText || "");
+
     documentChunks = chunkText(fullManuscriptText);
 
     // توفير التوكنز: مسح الـ PDF بعد الاستخراج الأول
@@ -269,23 +330,29 @@ export const chatWithManuscriptStream = async (
 
   try {
     await throttleRequest();
-    const relevantChunks = retrieveRelevantChunks(userPrompt, documentChunks);
+    // Retrieve 15 chunks explicitly for deep coverage
+    const relevantChunks = retrieveRelevantChunks(userPrompt, documentChunks, 15);
 
     let augmentedPrompt = "";
     const hasChunks = relevantChunks.length > 0;
 
     if (hasChunks) {
       const contextText = relevantChunks.join("\n\n---\n\n");
-      augmentedPrompt = `CRITICAL CONTEXT FROM MANUSCRIPT:
+      augmentedPrompt = `CRITICAL CONTEXT FROM MANUSCRIPT (Use this to answer):
 ${contextText}
 
 USER QUESTION:
 ${userPrompt}
 
-INSTRUCTION: You MUST answer based on the provided context. Adopt the author's style. Support your answer with direct quotes.`;
+INSTRUCTION: You are an advanced analytical engine capable of deep synthesis.
+1. Answer the question COMPREHENSIVELY using ONLY the provided context.
+2. If the answer is scattered across multiple chunks, synthesize them into a cohesive narrative.
+3. If the question asks for a summary or broad concept, ensure you cover all relevant aspects found in the context.
+4. Adopt the author's intellectual style.
+5. Support your arguments with direct, verbatim quotes from the text.`;
     } else {
       augmentedPrompt = `USER QUESTION: ${userPrompt}
-INSTRUCTION: Scan the entire manuscript to find the answer. Adopt the author's style. Be specific and provide quotes.`;
+INSTRUCTION: The specific context was not found in the initial search. However, based on your general analysis of the manuscript's metadata and structure, attempt to provide a helpful answer if possible, or clearly state that this specific detail is not present in the extracted text. Adopt the author's style.`;
     }
 
     if (!chatSession) {
