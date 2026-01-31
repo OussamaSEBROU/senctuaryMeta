@@ -221,7 +221,8 @@ ${schemaDescription}`;
           content: contentPayload as any,
         },
       ],
-      response_format: { type: "json_object" },
+      // Valid JSON is extracted manually via Regex to avoid strict API validation errors
+      // response_format: { type: "json_object" }, 
     });
 
     let responseContent = completion.choices[0]?.message?.content || "{}";
